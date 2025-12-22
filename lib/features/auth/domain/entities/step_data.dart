@@ -22,6 +22,10 @@ class StepData extends Equatable {
   /// Calorías estimadas (0.04 cal por paso)
   double get estimatedCalories => stepCount * 0.04;
 
+  /// NUEVO: Detectar posible caída
+  /// Una caída se detecta cuando la magnitud > 25 m/s²
+  bool get isPossibleFall => magnitude > 25.0;
+
   /// Factory para crear desde Map del Platform Channel
   factory StepData.fromMap(Map<dynamic, dynamic> map) {
     final activityTypeString = map['activityType'] as String;

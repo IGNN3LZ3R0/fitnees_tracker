@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../../auth/data/datasources/accelerometer_datasource.dart';
 import '../../../auth/domain/entities/step_data.dart';
+// NUEVO: Importar datasource de notificaciones
+import '../../../notifications/data/datasources/notification_datasource.dart';
 
 /// Widget que muestra el contador de pasos
 ///
 /// EXPLICACIÓN DIDÁCTICA:
 /// - Usa StreamSubscription para escuchar el EventChannel
 /// - Actualiza UI cada vez que llegan nuevos datos
+/// - NUEVO: Envía notificación al alcanzar 30 pasos
+/// - NUEVO: Detecta caídas y envía alerta
 class StepCounterWidget extends StatefulWidget {
   const StepCounterWidget({super.key});
 
@@ -17,15 +21,40 @@ class StepCounterWidget extends StatefulWidget {
 
 class _StepCounterWidgetState extends State<StepCounterWidget> {
   final AccelerometerDataSource _dataSource = AccelerometerDataSourceImpl();
+  
+  // NUEVO: DataSource para notificaciones
+  final NotificationDataSource _notificationDataSource = NotificationDataSourceImpl();
 
   StreamSubscription<StepData>? _subscription;
   StepData? _currentData;
   bool _isTracking = false;
+  
+  // NUEVO: Control de notificaciones
+  bool _goalNotificationSent = false;
+  bool _hasNotificationPermission = false;
+  
+  // NUEVO: Control de detección de caídas
+  DateTime? _lastFallDetectionTime;
+  bool _fallDialogShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _requestNotificationPermissions();
+  }
 
   @override
   void dispose() {
     _subscription?.cancel();
     super.dispose();
+  }
+
+  // NUEVO: Solicitar permisos de notificaciones
+  Future<void> _requestNotificationPermissions() async {
+    final granted = await _notificationDataSource.requestPermissions();
+    setState(() {
+      _hasNotificationPermission = granted;
+    });
   }
 
   void _toggleTracking() {
@@ -37,7 +66,7 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
   }
 
   void _startTracking() async {
-    // Solicitar permisos
+    // Solicitar permisos de sensores
     final hasPermission = await _dataSource.requestPermissions();
     if (!hasPermission) {
       if (mounted) {
@@ -52,6 +81,9 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
     }
 
     await _dataSource.startCounting();
+    
+    // Resetear control de notificación
+    _goalNotificationSent = false;
 
     // SUSCRIBIRSE AL STREAM
     _subscription = _dataSource.stepStream.listen(
@@ -59,6 +91,52 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
         setState(() {
           _currentData = data;
         });
+
+        // ═══════════════════════════════════════════════════════
+        // NUEVO: RETO 1 - Notificación al alcanzar 30 pasos
+        // ═══════════════════════════════════════════════════════
+        if (data.stepCount >= 30 && !_goalNotificationSent && _hasNotificationPermission) {
+          _goalNotificationSent = true;
+          _notificationDataSource.showStepGoalNotification(data.stepCount);
+          
+          // Mostrar también en UI
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.celebration, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Text('¡Meta alcanzada! ${data.stepCount} pasos'),
+                  ],
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // NUEVO: RETO 2 - Detección de caídas
+        // ═══════════════════════════════════════════════════════
+        if (data.isPossibleFall && _hasNotificationPermission && !_fallDialogShown) {
+          // Verificar cooldown de 10 segundos entre detecciones
+          final now = DateTime.now();
+          if (_lastFallDetectionTime == null || 
+              now.difference(_lastFallDetectionTime!).inSeconds > 10) {
+            
+            _lastFallDetectionTime = now;
+            _fallDialogShown = true;
+            
+            _notificationDataSource.showFallDetectionAlert();
+            
+            // Mostrar alerta en UI
+            if (mounted) {
+              _showFallAlertDialog();
+            }
+          }
+        }
       },
       onError: (error) {
         print('Error en stream: $error');
@@ -77,6 +155,66 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
     setState(() {
       _isTracking = false;
     });
+  }
+
+  // NUEVO: Diálogo de alerta de caída
+  void _showFallAlertDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) => WillPopScope(
+        onWillPop: () async => false, // Bloquear botón de atrás
+        child: AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.red, size: 32),
+              SizedBox(width: 8),
+              Expanded(child: Text('Caída Detectada')),
+            ],
+          ),
+          content: const Text(
+            '⚠️ Se ha detectado una posible caída.\n\n'
+            '¿Estás bien?',
+            style: TextStyle(fontSize: 16),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                setState(() {
+                  _fallDialogShown = false; // Permitir nueva detección
+                });
+              },
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: const Text('Estoy bien', style: TextStyle(fontSize: 16)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                setState(() {
+                  _fallDialogShown = false;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Contactando a emergencias...'),
+                    backgroundColor: Colors.red,
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: const Text('Necesito ayuda', style: TextStyle(fontSize: 16)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -107,6 +245,34 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
                 ),
               ],
             ),
+            
+            // NUEVO: Indicador de permisos
+            if (!_hasNotificationPermission && _isTracking)
+              Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.notifications_off, color: Colors.orange, size: 16),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Notificaciones desactivadas',
+                        style: TextStyle(color: Colors.orange, fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _requestNotificationPermissions,
+                      child: const Text('Activar'),
+                    ),
+                  ],
+                ),
+              ),
+            
             const Divider(),
 
             // Contador
@@ -119,6 +285,29 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
               ),
             ),
             const Text('pasos', style: TextStyle(fontSize: 16, color: Colors.grey)),
+            
+            // NUEVO: Indicador de progreso a meta
+            if (_isTracking)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Column(
+                  children: [
+                    LinearProgressIndicator(
+                      value: ((_currentData?.stepCount ?? 0) / 30).clamp(0.0, 1.0),
+                      backgroundColor: Colors.grey[200],
+                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
+                      minHeight: 8,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${(_currentData?.stepCount ?? 0)}/30 pasos hacia la meta',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            
             const SizedBox(height: 16),
 
             // Indicadores
@@ -137,6 +326,30 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
                 ),
               ],
             ),
+            
+            // NUEVO: Indicador de detección de caídas
+            if (_isTracking)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.health_and_safety, color: Colors.blue, size: 16),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Detección de caídas: ${(_currentData?.magnitude ?? 0).toStringAsFixed(1)} m/s²',
+                        style: const TextStyle(color: Colors.blue, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),
