@@ -1,36 +1,25 @@
-import 'package:flutter/services.dart';
-import '../../../../core/platform/platform_channels.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:local_auth/error_codes.dart' as auth_error;
 import '../../domain/entities/auth_result.dart';
 
-/// DataSource para autenticación biométrica usando Platform Channels
-/// - Este es el LADO FLUTTER del Platform Channel
-/// - Usamos MethodChannel porque es petición/respuesta
-/// - El nombre del canal DEBE coincidir con el lado Android
 abstract class BiometricDataSource {
   Future<bool> canAuthenticate();
   Future<AuthResult> authenticate();
 }
 
 class BiometricDataSourceImpl implements BiometricDataSource {
-  /// MethodChannel: canal de comunicación Flutter ↔ Android
-  /// El nombre debe ser exactamente igual en ambos lados
-  final MethodChannel _channel = const MethodChannel(
-    PlatformChannels.biometric
-  );
+  final LocalAuthentication _localAuth = LocalAuthentication();
 
   @override
   Future<bool> canAuthenticate() async {
     try {
-      /// invokeMethod: envía un mensaje a Android y espera respuesta
-      /// - Parámetro 1: nombre del método (debe coincidir en Android)
-      /// - Retorna: un Future con la respuesta
-      final result = await _channel.invokeMethod<bool>(
-        'checkBiometricSupport'
-      );
-
-      return result ?? false;
-    } on PlatformException catch (e) {
-      print('Error verificando biometría: ${e.message}');
+      // Verificar si el dispositivo tiene hardware biométrico
+      final canAuthenticateWithBiometrics = await _localAuth.canCheckBiometrics;
+      final canAuthenticate = await _localAuth.isDeviceSupported();
+      
+      return canAuthenticateWithBiometrics || canAuthenticate;
+    } catch (e) {
+      print('Error verificando biometria: $e');
       return false;
     }
   }
@@ -38,17 +27,58 @@ class BiometricDataSourceImpl implements BiometricDataSource {
   @override
   Future<AuthResult> authenticate() async {
     try {
-      /// Llamamos al método 'authenticate' del lado Android
-      final result = await _channel.invokeMethod<bool>('authenticate');
+      // Verificar disponibilidad
+      final canAuth = await canAuthenticate();
+      if (!canAuth) {
+        return const AuthResult(
+          success: false,
+          message: 'Biometria no disponible en este dispositivo',
+        );
+      }
 
-      return AuthResult(
-        success: result ?? false,
-        message: result == true ? 'Autenticación exitosa' : 'Autenticación fallida',
+      // Obtener biometrías disponibles
+      final availableBiometrics = await _localAuth.getAvailableBiometrics();
+      print('Biometrias disponibles: $availableBiometrics');
+
+      // Autenticar
+      final didAuthenticate = await _localAuth.authenticate(
+        localizedReason: 'Autentícate para acceder a la app',
+        options: const AuthenticationOptions(
+          stickyAuth: true,  // No cancelar si sale de la app
+          biometricOnly: false,  // Permitir PIN/Patrón como alternativa
+        ),
       );
-    } on PlatformException catch (e) {
+
+      if (didAuthenticate) {
+        return const AuthResult(
+          success: true,
+          message: 'Autenticacion exitosa',
+        );
+      } else {
+        return const AuthResult(
+          success: false,
+          message: 'Autenticacion cancelada',
+        );
+      }
+
+    } catch (e) {
+      // Manejar errores específicos
+      String errorMessage = 'Error desconocido';
+      
+      if (e.toString().contains(auth_error.notAvailable)) {
+        errorMessage = 'Biometria no disponible';
+      } else if (e.toString().contains(auth_error.notEnrolled)) {
+        errorMessage = 'No hay huellas registradas';
+      } else if (e.toString().contains(auth_error.lockedOut)) {
+        errorMessage = 'Bloqueado temporalmente';
+      } else if (e.toString().contains(auth_error.permanentlyLockedOut)) {
+        errorMessage = 'Bloqueado permanentemente';
+      }
+
+      print('Error en autenticacion: $e');
       return AuthResult(
         success: false,
-        message: 'Error: ${e.message}',
+        message: errorMessage,
       );
     }
   }

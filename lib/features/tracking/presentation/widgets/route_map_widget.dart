@@ -179,7 +179,7 @@ class _RouteMapWidgetState extends State<RouteMapWidget> {
                 ),
                 _buildMetric(
                   icon: Icons.local_fire_department,
-                  value: '${_route.estimatedCalories.toStringAsFixed(0)}',
+                  value: _route.estimatedCalories.toStringAsFixed(0),
                   label: 'Calorías',
                 ),
               ],
@@ -257,7 +257,7 @@ class RoutePainter extends CustomPainter {
       if (point.longitude > maxLon) maxLon = point.longitude;
     }
 
-    final padding = 20.0;
+    const padding = 20.0;
     final drawWidth = size.width - padding * 2;
     final drawHeight = size.height - padding * 2;
 

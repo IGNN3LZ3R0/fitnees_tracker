@@ -2,16 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../../auth/data/datasources/accelerometer_datasource.dart';
 import '../../../auth/domain/entities/step_data.dart';
-// NUEVO: Importar datasource de notificaciones
 import '../../../notifications/data/datasources/notification_datasource.dart';
 
-/// Widget que muestra el contador de pasos
-///
-/// EXPLICACIÓN DIDÁCTICA:
-/// - Usa StreamSubscription para escuchar el EventChannel
-/// - Actualiza UI cada vez que llegan nuevos datos
-/// - NUEVO: Envía notificación al alcanzar 30 pasos
-/// - NUEVO: Detecta caídas y envía alerta
 class StepCounterWidget extends StatefulWidget {
   const StepCounterWidget({super.key});
 
@@ -21,26 +13,20 @@ class StepCounterWidget extends StatefulWidget {
 
 class _StepCounterWidgetState extends State<StepCounterWidget> {
   final AccelerometerDataSource _dataSource = AccelerometerDataSourceImpl();
-  
-  // NUEVO: DataSource para notificaciones
   final NotificationDataSource _notificationDataSource = NotificationDataSourceImpl();
 
   StreamSubscription<StepData>? _subscription;
   StepData? _currentData;
   bool _isTracking = false;
-  
-  // NUEVO: Control de notificaciones
   bool _goalNotificationSent = false;
   bool _hasNotificationPermission = false;
-  
-  // NUEVO: Control de detección de caídas
   DateTime? _lastFallDetectionTime;
   bool _fallDialogShown = false;
 
   @override
   void initState() {
     super.initState();
-    _requestNotificationPermissions();
+    _initializeNotifications();
   }
 
   @override
@@ -49,7 +35,14 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
     super.dispose();
   }
 
-  // NUEVO: Solicitar permisos de notificaciones
+  // ═══════════════════════════════════════════════════════════
+  // NUEVO: Inicializar plugin de notificaciones
+  // ═══════════════════════════════════════════════════════════
+  Future<void> _initializeNotifications() async {
+    await _notificationDataSource.initialize();
+    await _requestNotificationPermissions();
+  }
+
   Future<void> _requestNotificationPermissions() async {
     final granted = await _notificationDataSource.requestPermissions();
     setState(() {
@@ -66,7 +59,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
   }
 
   void _startTracking() async {
-    // Solicitar permisos de sensores
     final hasPermission = await _dataSource.requestPermissions();
     if (!hasPermission) {
       if (mounted) {
@@ -81,25 +73,19 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
     }
 
     await _dataSource.startCounting();
-    
-    // Resetear control de notificación
     _goalNotificationSent = false;
 
-    // SUSCRIBIRSE AL STREAM
     _subscription = _dataSource.stepStream.listen(
       (data) {
         setState(() {
           _currentData = data;
         });
 
-        // ═══════════════════════════════════════════════════════
-        // NUEVO: RETO 1 - Notificación al alcanzar 30 pasos
-        // ═══════════════════════════════════════════════════════
+        // Notificación al alcanzar 30 pasos
         if (data.stepCount >= 30 && !_goalNotificationSent && _hasNotificationPermission) {
           _goalNotificationSent = true;
           _notificationDataSource.showStepGoalNotification(data.stepCount);
           
-          // Mostrar también en UI
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -117,11 +103,8 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
           }
         }
 
-        // ═══════════════════════════════════════════════════════
-        // NUEVO: RETO 2 - Detección de caídas
-        // ═══════════════════════════════════════════════════════
+        // Detección de caídas
         if (data.isPossibleFall && _hasNotificationPermission && !_fallDialogShown) {
-          // Verificar cooldown de 10 segundos entre detecciones
           final now = DateTime.now();
           if (_lastFallDetectionTime == null || 
               now.difference(_lastFallDetectionTime!).inSeconds > 10) {
@@ -131,7 +114,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
             
             _notificationDataSource.showFallDetectionAlert();
             
-            // Mostrar alerta en UI
             if (mounted) {
               _showFallAlertDialog();
             }
@@ -157,13 +139,12 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
     });
   }
 
-  // NUEVO: Diálogo de alerta de caída
   void _showFallAlertDialog() {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext dialogContext) => WillPopScope(
-        onWillPop: () async => false, // Bloquear botón de atrás
+        onWillPop: () async => false,
         child: AlertDialog(
           title: const Row(
             children: [
@@ -182,7 +163,7 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
               onPressed: () {
                 Navigator.of(dialogContext).pop();
                 setState(() {
-                  _fallDialogShown = false; // Permitir nueva detección
+                  _fallDialogShown = false;
                 });
               },
               style: TextButton.styleFrom(
@@ -226,7 +207,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Header
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -246,7 +226,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
               ],
             ),
             
-            // NUEVO: Indicador de permisos
             if (!_hasNotificationPermission && _isTracking)
               Container(
                 margin: const EdgeInsets.only(top: 8),
@@ -275,7 +254,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
             
             const Divider(),
 
-            // Contador
             Text(
               '${_currentData?.stepCount ?? 0}',
               style: const TextStyle(
@@ -286,7 +264,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
             ),
             const Text('pasos', style: TextStyle(fontSize: 16, color: Colors.grey)),
             
-            // NUEVO: Indicador de progreso a meta
             if (_isTracking)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 12),
@@ -310,7 +287,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
             
             const SizedBox(height: 16),
 
-            // Indicadores
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
@@ -327,7 +303,6 @@ class _StepCounterWidgetState extends State<StepCounterWidget> {
               ],
             ),
             
-            // NUEVO: Indicador de detección de caídas
             if (_isTracking)
               Padding(
                 padding: const EdgeInsets.only(top: 12),

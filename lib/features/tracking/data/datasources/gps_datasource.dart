@@ -1,13 +1,9 @@
-import 'package:flutter/services.dart';
-import 'package:permission_handler/permission_handler.dart';
-import '../../../../core/platform/platform_channels.dart';
+import 'dart:async';
+import 'package:geolocator/geolocator.dart';
 import '../../domain/entities/location_point.dart';
 
-/// DataSource para GPS
-///
-/// EXPLICACIÓN DIDÁCTICA:
-/// - Combina MethodChannel (operaciones puntuales)
-/// - Con EventChannel (stream de ubicaciones)
+/// DataSource para GPS usando el plugin geolocator
+
 abstract class GpsDataSource {
   Future<LocationPoint?> getCurrentLocation();
   Stream<LocationPoint> get locationStream;
@@ -16,51 +12,119 @@ abstract class GpsDataSource {
 }
 
 class GpsDataSourceImpl implements GpsDataSource {
-  final MethodChannel _methodChannel = const MethodChannel(
-    PlatformChannels.gps
-  );
+  StreamController<LocationPoint>? _locationController;
 
-  final EventChannel _eventChannel = const EventChannel(
-    '${PlatformChannels.gps}/stream'
-  );
+  @override
+  Future<bool> isGpsEnabled() async {
+    return await Geolocator.isLocationServiceEnabled();
+  }
+
+  @override
+  Future<bool> requestPermissions() async {
+    // Verificar servicios de ubicación
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      print('Servicios de ubicacion deshabilitados');
+      return false;
+    }
+
+    // Verificar permisos
+    LocationPermission permission = await Geolocator.checkPermission();
+    
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        print('Permisos de ubicacion denegados');
+        return false;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      print('Permisos de ubicacion denegados permanentemente');
+      return false;
+    }
+
+    print('Permisos de ubicacion concedidos');
+    return true;
+  }
 
   @override
   Future<LocationPoint?> getCurrentLocation() async {
     try {
-      final result = await _methodChannel.invokeMethod('getCurrentLocation');
-      if (result != null) {
-        return LocationPoint.fromMap(result as Map<dynamic, dynamic>);
-      }
-      return null;
-    } on PlatformException catch (e) {
-      print('Error obteniendo ubicación: ${e.message}');
+      final hasPermission = await requestPermissions();
+      if (!hasPermission) return null;
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+
+      return _positionToLocationPoint(position);
+    } catch (e) {
+      print('Error obteniendo ubicacion actual: $e');
       return null;
     }
   }
 
   @override
   Stream<LocationPoint> get locationStream {
-    return _eventChannel.receiveBroadcastStream().map((event) {
-      return LocationPoint.fromMap(event as Map<dynamic, dynamic>);
-    });
+    _locationController ??= StreamController<LocationPoint>.broadcast(
+      onListen: _startLocationUpdates,
+      onCancel: _stopLocationUpdates,
+    );
+    return _locationController!.stream;
   }
 
-  @override
-  Future<bool> isGpsEnabled() async {
-    try {
-      return await _methodChannel.invokeMethod('isGpsEnabled') ?? false;
-    } on PlatformException {
-      return false;
-    }
+  StreamSubscription<Position>? _positionSubscription;
+
+  void _startLocationUpdates() {
+    print('Iniciando stream de ubicaciones...');
+
+    // Configuración de precisión
+    const locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 2, // Mínimo 2 metros de cambio
+      timeLimit: Duration(seconds: 30),
+    );
+
+    _positionSubscription = Geolocator.getPositionStream(
+      locationSettings: locationSettings,
+    ).listen(
+      (Position position) {
+        final locationPoint = _positionToLocationPoint(position);
+        _locationController?.add(locationPoint);
+        
+        print('Nueva ubicación: '
+              'lat=${position.latitude.toStringAsFixed(6)}, '
+              'lon=${position.longitude.toStringAsFixed(6)}, '
+              'acc=${position.accuracy.toStringAsFixed(1)}m');
+      },
+      onError: (error) {
+        print('Error en stream de ubicacion: $error');
+        _locationController?.addError(error);
+      },
+    );
   }
 
-  @override
-  Future<bool> requestPermissions() async {
-    final locationStatus = await Permission.location.request();
-    if (!locationStatus.isGranted) {
-      final whenInUseStatus = await Permission.locationWhenInUse.request();
-      return whenInUseStatus.isGranted;
-    }
-    return locationStatus.isGranted;
+  void _stopLocationUpdates() {
+    print('Deteniendo stream de ubicaciones');
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
+  }
+
+  LocationPoint _positionToLocationPoint(Position position) {
+    return LocationPoint(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      altitude: position.altitude,
+      speed: position.speed,
+      accuracy: position.accuracy,
+      timestamp: position.timestamp ?? DateTime.now(),
+    );
+  }
+
+  void dispose() {
+    _stopLocationUpdates();
+    _locationController?.close();
   }
 }

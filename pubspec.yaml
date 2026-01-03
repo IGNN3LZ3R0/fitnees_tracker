@@ -1,5 +1,5 @@
 name: fitness_tracker
-description: App de fitness con Platform Channels
+description: App de fitness con plugins nativos de Flutter
 version: 1.0.0
 
 environment:
@@ -18,8 +18,13 @@ dependencies:
 
   # Manejo de permisos
   permission_handler: ^11.0.1
+
+  # Plugins que son nuevos y reemplazan los Platform Channels
+  local_auth: ^2.3.0              # Autenticación biométrica
+  geolocator: ^13.0.2             # GPS y ubicación
+  sensors_plus: ^6.0.1            # Acelerómetro y sensores
   
-  # NUEVO: Notificaciones locales
+  # Notificaciones locales (ya existente)
   flutter_local_notifications: ^17.0.0
 
 dev_dependencies:
